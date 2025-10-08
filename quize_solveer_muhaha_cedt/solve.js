@@ -1,12 +1,12 @@
 (async function () {
-  const quizItems = document.querySelectorAll(".cvocp-quiz-item.cvocp-quiz-course-theme");
+  const quizItems = document.querySelectorAll(".cvocp-quiz-item");
   const answers = {};
   const choiceIndex = {};
 
   // Collect all choices
   for (const ques of quizItems) {
     const qid = ques.dataset.qstnNid;
-    const choiceElems = ques.querySelectorAll("div div div[data-part='choice-item']");
+    const choiceElems = ques.querySelectorAll("div[data-part='choice-item']");
     answers[qid] = [];
     for (let i = 0; i < choiceElems.length; i++) {
       const el = document.getElementById(`choice-qstn-${qid}-${i}`);
@@ -31,31 +31,53 @@
     return await res.json();
   }
 
-  // Try each question one by one
+  // Detect correct choice for each question
   for (const qid in answers) {
     const numChoices = answers[qid].length;
-    console.log(`🧩 Trying question ${qid} with ${numChoices} choices...`);
+    console.log(`🧩 Trying question ${qid} (${numChoices} choices)...`);
+
+    let found = false;
+
     for (let i = 0; i < numChoices; i++) {
       const btn = document.getElementById(`choice-qstn-${qid}-${i}`);
       if (!btn) continue;
       btn.click();
 
       const res = await submitChoice({ [qid]: i });
-      console.log(`  ➜ Choice ${i}: result=`, res.result?.[qid], "score:", res.score);
+      const resultRaw = res.result;
+      const score = res.score ?? 0;
 
-      // ✅ Stop when this question is correct
-      if (res.result?.[qid] === "1") {
+      // Check if correct (handle various formats)
+      const isCorrect =
+        resultRaw === "1" ||
+        resultRaw === 1 ||
+        resultRaw?.[qid] === "1" ||
+        resultRaw?.[qid] === 1 ||
+        (Array.isArray(resultRaw) && resultRaw.includes("1")) ||
+        (typeof resultRaw === "object" && Object.values(resultRaw).includes("1"));
+
+      console.log(`  ➜ Choice ${i}:`, answers[qid][i], "| result=", resultRaw, "| score:", score);
+
+      if (isCorrect) {
         console.log(`✅ Question ${qid} correct on choice ${i}`);
+        choiceIndex[qid] = i;
+        found = true;
+        // Mark visually
+        btn.parentElement.style.background = "#d1f7c4";
         break;
       }
+
+      await new Promise(r => setTimeout(r, 250));
     }
+
+    if (!found) console.warn(`❌ Question ${qid} — no correct choice detected`);
   }
 
-  // Final check if all correct
+  // Final recheck submission
   const finalRes = await submitChoice(choiceIndex);
+  console.log("Final submission:", finalRes);
+
   if (finalRes.score === finalRes.scoretotal) {
-    document.querySelectorAll('img[data-type="cross"]').forEach(n => (n.dataset.visible = "0"));
-    document.querySelectorAll('img[data-type="check"]').forEach(n => (n.dataset.visible = "1"));
     alert("🎉 Done! All answers correct.");
   } else {
     alert(`⚠️ Finished but score ${finalRes.score}/${finalRes.scoretotal}`);
