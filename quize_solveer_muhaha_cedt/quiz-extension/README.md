@@ -1,5 +1,7 @@
-# CVocp Quiz Solver Extension
 
+
+# CVocp Quiz Solver Extension
+(just 2 second)
 This folder contains a Manifest V3 Chrome extension that runs the quiz-solving script automatically on pages that match `*cvocp*` in their URL.
 
 ## Load in Chrome
