@@ -5,8 +5,6 @@
   }
   window.__cvocpQuizSolverActive = true;
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
   const run = async () => {
     const quizItems = Array.from(document.querySelectorAll(".cvocp-quiz-item"));
     if (!quizItems.length) {
@@ -24,40 +22,85 @@
       return;
     }
 
-    const answers = {};
-    const choiceIndex = {};
-    quizItems.forEach((ques) => {
-      const qid = ques.dataset.qstnNid;
+    const questionState = Object.create(null);
+    let totalChoiceCount = 0;
+
+    quizItems.forEach((question) => {
+      const qid = question.dataset.qstnNid;
       if (!qid) return;
 
-      const choiceElems = Array.from(
-        ques.querySelectorAll("div div div[data-part='choice-item']")
+      const choiceNodes = Array.from(
+        question.querySelectorAll("div div div[data-part='choice-item']")
       );
 
-      answers[qid] = [];
-      choiceElems.forEach((_, idx) => {
+      const selections = [];
+      choiceNodes.forEach((node, idx) => {
         const input = document.getElementById(`choice-qstn-${qid}-${idx}`);
-        if (input) {
-          answers[qid].push(input.value);
-        }
+        if (!input) return;
+        selections.push({
+          input,
+          wrapper: node,
+          value: input.value,
+          label: node.innerText?.trim() ?? `Choice ${idx + 1}`
+        });
       });
 
-      if (!answers[qid].length) {
-        console.warn(`CVocp Quiz Solver: no choices detected for question ${qid}.`);
+      if (!selections.length) {
+        console.warn(`CVocp Quiz Solver: no selectable choices for question ${qid}.`);
+        return;
       }
 
-      choiceIndex[qid] = 0;
+      questionState[qid] = {
+        selections,
+        index: 0,
+        solved: false
+      };
+
+      totalChoiceCount += selections.length;
     });
 
-    const submitChoice = async (choiceMap) => {
+    const qids = Object.keys(questionState);
+    if (!qids.length) {
+      console.warn("CVocp Quiz Solver: no valid questions detected.");
+      return;
+    }
+
+    const parseQuestionResult = (resultPayload, qid) => {
+      if (resultPayload == null) return null;
+
+      if (typeof resultPayload === "object" && !Array.isArray(resultPayload)) {
+        if (Object.prototype.hasOwnProperty.call(resultPayload, qid)) {
+          return resultPayload[qid];
+        }
+        const directMatch = Object.values(resultPayload).find(
+          (value) => value === "1" || value === 1 || value === "0" || value === 0
+        );
+        return directMatch ?? null;
+      }
+
+      if (typeof resultPayload === "string" || typeof resultPayload === "number") {
+        return resultPayload;
+      }
+
+      if (Array.isArray(resultPayload)) {
+        const canonical = resultPayload.find(
+          (value) => value === "1" || value === 1 || value === "0" || value === 0
+        );
+        return canonical ?? null;
+      }
+
+      return null;
+    };
+
+    const submitSelection = async (selectionMap) => {
       const payload = new URLSearchParams();
       payload.append("nid", quizNid);
       payload.append("sid", sessionId);
 
-      Object.entries(choiceMap).forEach(([qid, choice]) => {
-        const answerValue = answers[qid]?.[choice];
-        if (typeof answerValue !== "undefined") {
-          payload.append(`answer_${qid}`, answerValue);
+      Object.entries(selectionMap).forEach(([qid, choiceIndex]) => {
+        const choice = questionState[qid]?.selections?.[choiceIndex];
+        if (choice && typeof choice.value !== "undefined") {
+          payload.append(`answer_${qid}`, choice.value);
         }
       });
 
@@ -69,63 +112,86 @@
       return response.json();
     };
 
-    const isCorrectResult = (raw, qid) => {
-      if (raw === "1" || raw === 1) return true;
-      if (Array.isArray(raw)) return raw.some((value) => value === "1" || value === 1);
-      if (typeof raw === "object" && raw !== null) {
-        const value = raw[qid];
-        if (value === "1" || value === 1) return true;
-        return Object.values(raw).some((val) => val === "1" || val === 1);
+    const pending = new Set(qids);
+    const attemptLimit = totalChoiceCount + qids.length;
+    let attempts = 0;
+    let lastResponse = null;
+
+    while (pending.size && attempts < attemptLimit) {
+      attempts += 1;
+
+      const submission = {};
+      pending.forEach((qid) => {
+        const state = questionState[qid];
+        const selection = state.selections[state.index];
+        if (!selection) return;
+
+        selection.input.click();
+        submission[qid] = state.index;
+      });
+
+      if (!Object.keys(submission).length) {
+        console.warn("CVocp Quiz Solver: no further selectable choices; aborting.");
+        break;
       }
-      return false;
-    };
-    for (const qid of Object.keys(answers)) {
-      const numChoices = answers[qid].length;
-      if (!numChoices) continue;
 
-      console.group(`🧩 CVocp Quiz Solver · Question ${qid}`);
-      let detected = false;
+      lastResponse = await submitSelection(submission);
+      const resultPayload = lastResponse?.result ?? null;
 
-      for (let idx = 0; idx < numChoices; idx++) {
-        const button = document.getElementById(`choice-qstn-${qid}-${idx}`);
-        if (!button) {
-          console.warn(`  ➜ Choice ${idx}: element not found.`);
-          continue;
+      pending.forEach((qid) => {
+        const state = questionState[qid];
+        const selection = state.selections[state.index];
+        if (!selection) {
+          pending.delete(qid);
+          return;
         }
 
-        button.click();
-        const result = await submitChoice({ [qid]: idx });
-        const rawResult =
-          typeof result.result === "object" ? result.result : result.result ?? null;
+        const rawResult = parseQuestionResult(resultPayload, qid);
+        const isCorrect = rawResult === "1" || rawResult === 1;
+        const isIncorrect = rawResult === "0" || rawResult === 0;
 
-        console.log(
-          `  ➜ Choice ${idx}: value=%o | raw=%o | score %s/%s`,
-          answers[qid][idx],
-          rawResult,
-          result.score,
-          result.scoretotal
-        );
-        if (isCorrectResult(rawResult, qid)) {
-          console.log(`  ✅ Question ${qid} correct on choice ${idx}`);
-          choiceIndex[qid] = idx;
-          button.parentElement?.style && (button.parentElement.style.background = "#d1f7c4");
-          detected = true;
-          break;
+        if (isCorrect) {
+          state.solved = true;
+          selection.wrapper.style.background = "#d1f7c4";
+          pending.delete(qid);
+          return;
         }
 
-        await sleep(250);
-      }
+        if (isIncorrect || rawResult == null) {
+          state.index += 1;
+          if (state.index >= state.selections.length) {
+            console.warn(`CVocp Quiz Solver: exhausted choices for question ${qid}.`);
+            pending.delete(qid);
+          }
+        }
+      });
 
-      if (!detected) {
-        console.warn(`  ❌ Question ${qid}: no correct choice detected.`);
-      }
-
-      console.groupEnd();
+      const score = Number(lastResponse?.score ?? 0);
+      const total = Number(lastResponse?.scoretotal ?? 0);
+      if (total && score === total) break;
     }
 
-    const finalResult = await submitChoice(choiceIndex);
-    console.log("CVocp Quiz Solver · Final submission", finalResult);
-    if (Number(finalResult.score) === Number(finalResult.scoretotal)) {
+    const finalSelection = {};
+    Object.entries(questionState).forEach(([qid, state]) => {
+      const safeIndex = Math.min(state.index, state.selections.length - 1);
+      const selection = state.selections[safeIndex];
+      if (!selection) return;
+      finalSelection[qid] = safeIndex;
+      if (!state.solved) {
+        selection.wrapper.style.background = "#fce4e4";
+      }
+    });
+
+    if (Object.keys(finalSelection).length) {
+      lastResponse = await submitSelection(finalSelection);
+    }
+
+    console.log("CVocp Quiz Solver · Final submission", lastResponse);
+
+    if (
+      lastResponse &&
+      Number(lastResponse.score ?? 0) === Number(lastResponse.scoretotal ?? NaN)
+    ) {
       document
         .querySelectorAll('img[data-type="cross"]')
         .forEach((img) => (img.dataset.visible = "0"));
@@ -134,9 +200,9 @@
         .forEach((img) => (img.dataset.visible = "1"));
       alert("🎉 CVocp Quiz Solver: All answers correct.");
     } else {
-      alert(
-        `⚠️ CVocp Quiz Solver: Finished with score ${finalResult.score}/${finalResult.scoretotal}`
-      );
+      const score = lastResponse?.score ?? "?";
+      const total = lastResponse?.scoretotal ?? "?";
+      alert(`⚠️ CVocp Quiz Solver: Finished with score ${score}/${total}`);
     }
   };
 
