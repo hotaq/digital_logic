@@ -1,7 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <circuit>
   <version>2</version>
-  <attributes/>
+  <attributes>
+    <entry>
+      <string>showDataGraphMicro</string>
+      <boolean>true</boolean>
+    </entry>
+    <entry>
+      <string>romContent</string>
+      <romList>
+        <roms/>
+      </romList>
+    </entry>
+  </attributes>
   <visualElements>
     <visualElement>
       <elementName>In</elementName>
@@ -364,6 +375,24 @@
         </entry>
       </elementAttributes>
       <pos x="-2380" y="840"/>
+    </visualElement>
+    <visualElement>
+      <elementName>Testcase</elementName>
+      <elementAttributes>
+        <entry>
+          <string>Label</string>
+          <string>T1</string>
+        </entry>
+        <entry>
+          <string>Testdata</string>
+          <testData>
+            <dataString>A B C D Before After
+0 0 1 1 1 1
+1 0 1 1 1 1</dataString>
+          </testData>
+        </entry>
+      </elementAttributes>
+      <pos x="-2580" y="240"/>
     </visualElement>
   </visualElements>
   <wires>
